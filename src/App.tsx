@@ -9,9 +9,12 @@ import {
   type LayerStatus,
   type PathStep,
 } from "./mockReport";
+import { collectLiveProbe } from "./liveProbe";
+import { buildLiveReport } from "./liveReport";
 import "./App.css";
 
 type View = "overview" | LayerDetail["id"];
+type DataMode = "live" | "demo";
 
 function statusLabel(s: LayerStatus): string {
   if (s === "ok") return "OK";
@@ -22,15 +25,15 @@ function statusLabel(s: LayerStatus): string {
 }
 
 function App() {
-  const [scenarioId, setScenarioId] = useState(SCENARIOS[0].id);
-  const [url, setUrl] = useState(SCENARIOS[0].url);
+  const [scenarioId, setScenarioId] = useState<string | null>(null);
+  const [url, setUrl] = useState("https://example.com");
   const [running, setRunning] = useState(false);
-  const [report, setReport] = useState<DiagnosticReport | null>(() =>
-    applyTestedUrl(SCENARIOS[0], SCENARIOS[0].url),
-  );
+  const [report, setReport] = useState<DiagnosticReport | null>(null);
+  const [dataMode, setDataMode] = useState<DataMode>("live");
   const [view, setView] = useState<View>("overview");
   const [copied, setCopied] = useState(false);
   const [showAllLayers, setShowAllLayers] = useState(false);
+  const [probeError, setProbeError] = useState<string | null>(null);
 
   const visibleLayers = useMemo(() => {
     if (!report) return [];
@@ -58,31 +61,39 @@ function App() {
   function selectScenario(id: string) {
     const scenario = SCENARIOS.find((s) => s.id === id);
     if (!scenario) return;
-    // Keep the URL under test — only swap the path/layer template
+    // Demo templates only — keep URL, mark as demo (not live)
     const keepUrl = url.trim() || report?.url || scenario.url;
     const bound = applyTestedUrl(scenario, keepUrl);
     setScenarioId(id);
+    setDataMode("demo");
     setUrl(bound.url);
     setReport(bound);
+    setProbeError(null);
     setView("overview");
     setCopied(false);
     setShowAllLayers(false);
   }
 
-  function runDiagnose() {
+  async function runDiagnose() {
     const input = url.trim();
     if (!input) return;
     setRunning(true);
     setCopied(false);
-    window.setTimeout(() => {
-      const base =
-        SCENARIOS.find((s) => s.id === scenarioId) ?? SCENARIOS[0];
-      const bound = applyTestedUrl(base, input);
-      setUrl(bound.url);
-      setReport(bound);
+    setProbeError(null);
+    setScenarioId(null);
+    setDataMode("live");
+    try {
+      const probe = await collectLiveProbe(input);
+      const live = buildLiveReport(probe);
+      setUrl(live.url);
+      setReport(live);
       setView("overview");
+      setShowAllLayers(false);
+    } catch (err) {
+      setProbeError(err instanceof Error ? err.message : String(err));
+    } finally {
       setRunning(false);
-    }, 700);
+    }
   }
 
   function copyReport() {
@@ -130,7 +141,9 @@ function App() {
             Enter a URL · see the same URL on every hop, fact, and layer
           </p>
         </div>
-        <span className="mode-pill">diagnostic</span>
+        <span className={`mode-pill ${dataMode}`}>
+          {dataMode === "live" ? "live probe" : "demo template"}
+        </span>
       </header>
 
       <section className="compose" aria-label="URL under test">
@@ -146,12 +159,26 @@ function App() {
         <button
           className="primary"
           type="button"
-          onClick={runDiagnose}
+          onClick={() => void runDiagnose()}
           disabled={running || !url.trim()}
         >
-          {running ? "Collecting…" : "Run diagnose"}
+          {running ? "Probing…" : "Run diagnose"}
         </button>
       </section>
+
+      {probeError && (
+        <p className="probe-error" role="alert">
+          Probe failed: {probeError}
+        </p>
+      )}
+
+      {!report && !running && (
+        <p className="empty-hint">
+          Run diagnose to collect real browser + network facts for this URL.
+          Island filter / SWG / policy fields stay N/A until a privileged
+          collector is wired. Demo path cards below only load mock templates.
+        </p>
+      )}
 
       {report && (
         <>
@@ -161,8 +188,10 @@ function App() {
               <span className="stat-value">{report.site}</span>
             </div>
             <div className="stat">
-              <span className="stat-label">Path pattern</span>
-              <span className="stat-value">{report.label}</span>
+              <span className="stat-label">Data</span>
+              <span className="stat-value">
+                {dataMode === "live" ? "Live probe" : "Demo template"}
+              </span>
             </div>
             <div className="stat">
               <span className="stat-label">Matched rule</span>
@@ -219,7 +248,11 @@ function App() {
             <section className="panel">
               <div className="panel-head">
                 <h2>Hop to hop</h2>
-                <span className="badge warn">browser · extension · rules</span>
+                <span className={`badge ${dataMode === "live" ? "ok" : "warn"}`}>
+                  {dataMode === "live"
+                    ? "live browser · network"
+                    : "demo template — not live"}
+                </span>
               </div>
               <HopPath
                 path={report.rulePath}
@@ -243,46 +276,6 @@ function App() {
                   </div>
                 ))}
               </div>
-
-              <section className="path-library" aria-label="Path patterns">
-                {SCENARIO_GROUPS.map((group) => {
-                  const items = group.scenarioIds
-                    .map((id) => SCENARIOS.find((s) => s.id === id))
-                    .filter((s): s is DiagnosticReport => Boolean(s));
-                  return (
-                    <div key={group.id} className="path-group">
-                      <div className="path-group-head">
-                        <h3>{group.title}</h3>
-                        <p>{group.hint}</p>
-                      </div>
-                      <div className="path-group-cards">
-                        {items.map((s) => (
-                          <button
-                            key={s.id}
-                            type="button"
-                            className={
-                              scenarioId === s.id
-                                ? "scenario-card active"
-                                : "scenario-card"
-                            }
-                            onClick={() => selectScenario(s.id)}
-                          >
-                            <span className="scenario-label">{s.label}</span>
-                            <span className="scenario-desc">
-                              {s.description}
-                            </span>
-                            {scenarioId === s.id ? (
-                              <span className="scenario-bound">
-                                Bound to · {report.site}
-                              </span>
-                            ) : null}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-              </section>
 
               <h3>Extracted data</h3>
               <div className="facts-board">
@@ -359,6 +352,53 @@ function App() {
                   ))}
                 </tbody>
               </table>
+
+              <section className="path-library" aria-label="Demo path templates">
+                <div className="path-library-head">
+                  <h3>Demo path templates</h3>
+                  <p>
+                    Mock case-shaped paths only. Selecting one switches to demo
+                    mode — use Run diagnose again for live probe data.
+                  </p>
+                </div>
+                {SCENARIO_GROUPS.map((group) => {
+                  const items = group.scenarioIds
+                    .map((id) => SCENARIOS.find((s) => s.id === id))
+                    .filter((s): s is DiagnosticReport => Boolean(s));
+                  return (
+                    <div key={group.id} className="path-group">
+                      <div className="path-group-head">
+                        <h3>{group.title}</h3>
+                        <p>{group.hint}</p>
+                      </div>
+                      <div className="path-group-cards">
+                        {items.map((s) => (
+                          <button
+                            key={s.id}
+                            type="button"
+                            className={
+                              dataMode === "demo" && scenarioId === s.id
+                                ? "scenario-card active"
+                                : "scenario-card"
+                            }
+                            onClick={() => selectScenario(s.id)}
+                          >
+                            <span className="scenario-label">{s.label}</span>
+                            <span className="scenario-desc">
+                              {s.description}
+                            </span>
+                            {dataMode === "demo" && scenarioId === s.id ? (
+                              <span className="scenario-bound">
+                                Demo · {report.site}
+                              </span>
+                            ) : null}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </section>
             </section>
           ) : (
             activeLayer && (

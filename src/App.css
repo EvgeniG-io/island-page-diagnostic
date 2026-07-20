@@ -37,6 +37,48 @@
   letter-spacing: 0.06em;
 }
 
+.mode-pill.live {
+  border-color: color-mix(in srgb, var(--ok) 45%, var(--line));
+  color: var(--ok);
+}
+
+.mode-pill.demo {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--line));
+  color: var(--warn);
+}
+
+.empty-hint {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px dashed var(--line);
+  color: var(--ink-muted);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.probe-error {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--fail) 40%, var(--line));
+  color: var(--fail);
+  font-size: 0.88rem;
+}
+
+.path-library-head {
+  margin-bottom: 12px;
+}
+
+.path-library-head h3 {
+  margin: 0 0 4px;
+  font-size: 0.95rem;
+}
+
+.path-library-head p {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 0.8rem;
+}
+
 .path-library {
   margin: 20px 0 8px;
   padding: 16px 0 4px;
