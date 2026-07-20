@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   SCENARIOS,
   SCENARIO_GROUPS,
@@ -11,6 +11,13 @@ import {
 } from "./mockReport";
 import { collectLiveProbe } from "./liveProbe";
 import { buildLiveReport } from "./liveReport";
+import {
+  collectPageSnapshot,
+  decodeSnapshotFromHash,
+  type PageSnapshot,
+} from "./pageCollector";
+import { buildBookmarkletHref } from "./bookmarkletSource";
+import { Layer1Panel } from "./Layer1Panel";
 import "./App.css";
 
 type View = "overview" | LayerDetail["id"];
@@ -34,6 +41,68 @@ function App() {
   const [copied, setCopied] = useState(false);
   const [showAllLayers, setShowAllLayers] = useState(false);
   const [probeError, setProbeError] = useState<string | null>(null);
+  const [layer1, setLayer1] = useState<PageSnapshot | null>(null);
+  const [layer1Busy, setLayer1Busy] = useState(false);
+  const [layer1Error, setLayer1Error] = useState<string | null>(null);
+  const [pasteJson, setPasteJson] = useState("");
+  const [bookmarkCopied, setBookmarkCopied] = useState(false);
+
+  const bookmarkHref = useMemo(
+    () => buildBookmarkletHref(window.location.origin + window.location.pathname),
+    [],
+  );
+
+  useEffect(() => {
+    const raw = window.location.hash.replace(/^#/, "");
+    if (!raw.startsWith("l1=")) return;
+    const snap = decodeSnapshotFromHash(raw.slice(3));
+    if (snap) {
+      setLayer1(snap);
+      setUrl(snap.page.href);
+      setLayer1Error(null);
+    } else {
+      setLayer1Error("Could not decode Layer-1 payload from URL hash.");
+    }
+  }, []);
+
+  async function collectThisPage() {
+    setLayer1Busy(true);
+    setLayer1Error(null);
+    try {
+      const snap = await collectPageSnapshot();
+      setLayer1(snap);
+      setUrl(snap.page.href);
+    } catch (err) {
+      setLayer1Error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLayer1Busy(false);
+    }
+  }
+
+  function loadPastedSnapshot() {
+    setLayer1Error(null);
+    try {
+      const data = JSON.parse(pasteJson) as PageSnapshot;
+      if (data?.kind !== "layer1" || data.version !== 1) {
+        setLayer1Error("JSON is not a Layer-1 snapshot (kind/version).");
+        return;
+      }
+      setLayer1(data);
+      setUrl(data.page.href);
+    } catch (err) {
+      setLayer1Error(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function copyBookmarklet() {
+    try {
+      await navigator.clipboard.writeText(bookmarkHref);
+      setBookmarkCopied(true);
+      window.setTimeout(() => setBookmarkCopied(false), 1600);
+    } catch {
+      setLayer1Error("Could not copy bookmarklet — drag the link instead.");
+    }
+  }
 
   const visibleLayers = useMemo(() => {
     if (!report) return [];
@@ -138,47 +207,107 @@ function App() {
         <div className="brand-block">
           <p className="brand">Island Page Diagnostic</p>
           <p className="tagline">
-            Enter a URL · see the same URL on every hop, fact, and layer
+            Layer 1: page JS collect (no Island code) · show on this page
           </p>
         </div>
-        <span className={`mode-pill ${dataMode}`}>
-          {dataMode === "live" ? "live probe" : "demo template"}
+        <span className={`mode-pill ${layer1 ? "live" : dataMode}`}>
+          {layer1 ? "layer-1" : dataMode === "live" ? "live probe" : "demo"}
         </span>
       </header>
 
-      <section className="compose" aria-label="URL under test">
-        <label className="field">
-          <span>URL to diagnose</span>
-          <input
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://… or localhost:5173"
+      <section className="layer1-collect" aria-label="Layer 1 collection">
+        <h2>Layer 1 · page collect</h2>
+        <p className="layer1-lead">
+          Collects storage, cookies (non-HttpOnly), DOM heuristics, scripts,
+          performance resources, service workers, and Cache Storage —{" "}
+          <strong>from the page you’re on</strong>. No extension APIs.
+        </p>
+
+        <div className="layer1-actions">
+          <button
+            type="button"
+            className="primary"
+            disabled={layer1Busy}
+            onClick={() => void collectThisPage()}
+          >
+            {layer1Busy ? "Collecting…" : "Collect this page"}
+          </button>
+          <a className="bookmarklet" href={bookmarkHref}>
+            ⧉ Collect problem page
+          </a>
+          <button type="button" className="ghost" onClick={() => void copyBookmarklet()}>
+            {bookmarkCopied ? "Bookmarklet copied" : "Copy bookmarklet"}
+          </button>
+        </div>
+        <p className="muted-inline">
+          Drag <em>Collect problem page</em> to your bookmarks bar. On the broken
+          site, click it — data shows in an overlay there, or use{" "}
+          <em>Open in diagnostic</em> / paste JSON below.
+        </p>
+
+        <label className="field paste-field">
+          <span>Paste Layer-1 JSON</span>
+          <textarea
+            value={pasteJson}
+            onChange={(e) => setPasteJson(e.target.value)}
+            rows={4}
             spellCheck={false}
+            placeholder='{"version":1,"kind":"layer1",…}'
           />
         </label>
         <button
-          className="primary"
           type="button"
-          onClick={() => void runDiagnose()}
-          disabled={running || !url.trim()}
+          className="ghost"
+          disabled={!pasteJson.trim()}
+          onClick={loadPastedSnapshot}
         >
-          {running ? "Probing…" : "Run diagnose"}
+          Load pasted snapshot
         </button>
+
+        {layer1Error && (
+          <p className="probe-error" role="alert">
+            {layer1Error}
+          </p>
+        )}
       </section>
 
-      {probeError && (
-        <p className="probe-error" role="alert">
-          Probe failed: {probeError}
-        </p>
+      {layer1 && (
+        <section className="panel" aria-label="Layer 1 report">
+          <div className="panel-head">
+            <h2>Layer 1 report</h2>
+            <span className="badge ok">page context</span>
+          </div>
+          <Layer1Panel snapshot={layer1} />
+        </section>
       )}
 
-      {!report && !running && (
-        <p className="empty-hint">
-          Run diagnose to collect real browser + network facts for this URL.
-          Island filter / SWG / policy fields stay N/A until a privileged
-          collector is wired. Demo path cards below only load mock templates.
-        </p>
-      )}
+      <details className="remote-probe">
+        <summary>Optional · remote URL probe (from this browser)</summary>
+        <section className="compose" aria-label="URL under test">
+          <label className="field">
+            <span>URL to probe</span>
+            <input
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://… or localhost:5173"
+              spellCheck={false}
+            />
+          </label>
+          <button
+            className="primary"
+            type="button"
+            onClick={() => void runDiagnose()}
+            disabled={running || !url.trim()}
+          >
+            {running ? "Probing…" : "Run remote probe"}
+          </button>
+        </section>
+        {probeError && (
+          <p className="probe-error" role="alert">
+            Probe failed: {probeError}
+          </p>
+        )}
+      </details>
 
       {report && (
         <>
