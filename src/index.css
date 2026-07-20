@@ -1,0 +1,48 @@
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Source+Sans+3:wght@400;550;650&display=swap");
+
+:root {
+  --bg: #e8eef0;
+  --surface: #f4f7f8;
+  --surface-tint: #dce6e9;
+  --ink: #152028;
+  --ink-soft: #2a3640;
+  --ink-muted: #5a6872;
+  --line: #c5d0d6;
+  --line-strong: #9aabb5;
+  --accent: #0b5f6b;
+  --accent-soft: color-mix(in srgb, var(--accent) 28%, transparent);
+  --ok: #1f7a4d;
+  --warn: #9a6b12;
+  --fail: #b23b2f;
+
+  font-family: "Source Sans 3", "Segoe UI", sans-serif;
+  font-size: 16px;
+  line-height: 1.45;
+  color: var(--ink);
+  background-color: var(--bg);
+  background-image:
+    linear-gradient(90deg, rgba(21, 32, 40, 0.03) 1px, transparent 1px),
+    linear-gradient(rgba(21, 32, 40, 0.03) 1px, transparent 1px);
+  background-size: 24px 24px;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+button,
+input {
+  border-radius: 0;
+}
