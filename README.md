@@ -2,7 +2,11 @@
 
 Per-URL diagnostic report UI.
 
-**Run diagnose** collects **live** browser + network probe facts (HTTP status when readable, timing, online/UA/timezone). Island filter / SWG / policy fields stay **N/A** until a privileged collector is wired. Path cards at the bottom are optional **demo templates** only.
+**Layer 1 (primary):** collect page-context data with no Island code — storage, non-HttpOnly cookies, DOM heuristics, scripts, Performance resources, service workers, Cache Storage. Use **Collect this page**, the **bookmarklet** on the problem page, or paste JSON.
+
+**Remote probe (optional):** HTTP reachability from this browser. Path cards remain **demo templates** only.
+
+**Layer 2 (not built yet):** backend enrichment (Coralogix / policy / connector) from tenant/user signals in the snapshot.
 
 ## Live (GitHub Pages)
 
