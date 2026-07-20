@@ -7,7 +7,11 @@ import type {
   PathStep,
   ReportLine,
 } from "./mockReport";
-import { probeOutcomeLabel, type LiveProbe } from "./liveProbe";
+import {
+  cacheSummary,
+  probeOutcomeLabel,
+  type LiveProbe,
+} from "./liveProbe";
 
 const UNAVAILABLE =
   "Unavailable from this web page — needs Island privileged collector";
@@ -131,6 +135,51 @@ export function buildLiveReport(probe: LiveProbe): DiagnosticReport {
       ],
     },
     {
+      id: "cache-observed",
+      label: "Cache (observed)",
+      origin: "page",
+      facts: [
+        { label: "Tested URL", value: displayUrl },
+        { label: "Host", value: host },
+        { label: "Browser cache hint", value: probe.cache.browserCacheHint },
+        {
+          label: "Cache-Control",
+          value: probe.cache.cacheControl ?? "Not readable",
+        },
+        { label: "Age", value: probe.cache.age ?? "Not readable" },
+        { label: "ETag", value: probe.cache.etag ?? "Not readable" },
+        {
+          label: "Last-Modified",
+          value: probe.cache.lastModified ?? "Not readable",
+        },
+        { label: "Expires", value: probe.cache.expires ?? "Not readable" },
+        { label: "Vary", value: probe.cache.vary ?? "Not readable" },
+        {
+          label: "CF-Cache-Status",
+          value: probe.cache.cfCacheStatus ?? "Not present / not readable",
+        },
+        {
+          label: "X-Cache",
+          value: probe.cache.xCache ?? "Not present / not readable",
+        },
+        {
+          label: "transferSize",
+          value:
+            probe.cache.transferSize != null
+              ? String(probe.cache.transferSize)
+              : "Not exposed",
+        },
+        {
+          label: "force-cache probe",
+          value: probe.cache.forceCacheHint ?? "n/a",
+        },
+        {
+          label: "Island classification cache",
+          value: probe.cache.islandClassificationCache,
+        },
+      ],
+    },
+    {
       id: "browser-local",
       label: "This browser (observed)",
       origin: "local",
@@ -154,6 +203,16 @@ export function buildLiveReport(probe: LiveProbe): DiagnosticReport {
           label: "Same origin as diagnostic UI",
           value: probe.isSameOrigin ? "Yes" : "No",
         },
+        {
+          label: "Cache Storage keys",
+          value:
+            probe.cache.cacheStorageKeys.length > 0
+              ? probe.cache.cacheStorageKeys.join(", ")
+              : probe.isSameOrigin
+                ? "None"
+                : "n/a (cross-origin)",
+        },
+        { label: "Service worker", value: probe.cache.serviceWorker },
       ],
     },
     {
@@ -165,6 +224,7 @@ export function buildLiveReport(probe: LiveProbe): DiagnosticReport {
         { label: "Host", value: host },
         { label: "Matched rule", value: UNAVAILABLE },
         { label: "URL category / reputation", value: UNAVAILABLE },
+        { label: "Classification cache", value: UNAVAILABLE },
         { label: "SWG verdict", value: UNAVAILABLE },
         { label: "Config / tenant policy", value: UNAVAILABLE },
         { label: "Extension / LMC", value: UNAVAILABLE },
@@ -178,6 +238,11 @@ export function buildLiveReport(probe: LiveProbe): DiagnosticReport {
       tag: "PROBE",
       body: `${outcome} · ${probe.elapsedMs}ms · ${probe.collectedAt}`,
       tone,
+    },
+    {
+      tag: "CACHE",
+      body: cacheSummary(probe.cache),
+      tone: probe.headersReadable ? "info" : "warn",
     },
     {
       tag: "BROWSER",
@@ -230,14 +295,42 @@ export function buildLiveReport(probe: LiveProbe): DiagnosticReport {
         ["User-Agent", uaShort],
       ],
     }),
-    layer("perf", "Probe timing", {
+    layer("perf", "Probe timing + cache", {
       status: probe.elapsedMs >= 3000 ? "warn" : "ok",
-      summary: `${probe.elapsedMs} ms wall time`,
+      summary: `${probe.elapsedMs} ms · ${cacheSummary(probe.cache)}`,
       rows: [
         ["Tested URL", displayUrl],
         ["Host", host],
         ["Elapsed ms", String(probe.elapsedMs)],
         ["Timeout budget", "12000 ms"],
+        ["Browser cache hint", probe.cache.browserCacheHint],
+        [
+          "Cache-Control",
+          probe.cache.cacheControl ?? "Not readable",
+        ],
+        ["Age", probe.cache.age ?? "Not readable"],
+        ["ETag", probe.cache.etag ?? "Not readable"],
+        [
+          "CF-Cache-Status",
+          probe.cache.cfCacheStatus ?? "Not present / not readable",
+        ],
+        ["X-Cache", probe.cache.xCache ?? "Not present / not readable"],
+        [
+          "transferSize",
+          probe.cache.transferSize != null
+            ? String(probe.cache.transferSize)
+            : "Not exposed",
+        ],
+        [
+          "force-cache ms",
+          probe.cache.forceCacheElapsedMs != null
+            ? String(probe.cache.forceCacheElapsedMs)
+            : "n/a",
+        ],
+        [
+          "Island classification cache",
+          probe.cache.islandClassificationCache,
+        ],
       ],
     }),
     {
@@ -246,7 +339,13 @@ export function buildLiveReport(probe: LiveProbe): DiagnosticReport {
     },
     {
       ...islandNa("browser-policy", "Browser Policy"),
-      rows: fillUrl(islandNa("browser-policy", "Browser Policy").rows),
+      rows: fillUrl([
+        ["Tested URL", ""],
+        ["Host", ""],
+        ["Classification cache", UNAVAILABLE],
+        ["Source", "Not collected"],
+        ["Reason", UNAVAILABLE],
+      ]),
     },
     {
       ...islandNa("swg", "SWG"),
@@ -298,6 +397,13 @@ export function buildLiveReport(probe: LiveProbe): DiagnosticReport {
     statusLines,
     layers,
     focusPrimary: true,
-    primaryLayers: ["page", "endpoint", "perf", "extension", "swg", "browser-policy"],
+    primaryLayers: [
+      "page",
+      "endpoint",
+      "perf",
+      "extension",
+      "swg",
+      "browser-policy",
+    ],
   };
 }
