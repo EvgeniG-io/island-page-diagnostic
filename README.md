@@ -1,6 +1,8 @@
 # Island Page Diagnostic (MVP UI)
 
-Per-URL Island diagnostic report UI. Currently uses **mock path templates** so the layout and layers can be reviewed without a privileged collector.
+Per-URL diagnostic report UI.
+
+**Run diagnose** collects **live** browser + network probe facts (HTTP status when readable, timing, online/UA/timezone). Island filter / SWG / policy fields stay **N/A** until a privileged collector is wired. Path cards at the bottom are optional **demo templates** only.
 
 ## Live (GitHub Pages)
 
@@ -15,9 +17,16 @@ npm run dev
 
 Open the URL Vite prints (usually `http://localhost:5173`).
 
-## Why mock today
+## Probe smoke (real network, Node)
 
-A normal website cannot read Island extension state, filter verdicts, SWG path, policy match, or device config. Real diagnostics need a privileged source (managed Island profile + extension / `island://diagnose`-style collector) that posts facts into this UI.
+```bash
+node scripts/probe-smoke.mjs
+node scripts/probe-smoke.mjs https://example.com
+```
+
+## Island-only data
+
+Matched rule, category/reputation, SWG verdict, tenant config, extension/LMC need a managed Island profile + privileged collector (not available to a normal website).
 
 ## Build
 
@@ -25,4 +34,4 @@ A normal website cannot read Island extension state, filter verdicts, SWG path, 
 npm run build
 ```
 
-For GitHub Pages builds, CI sets `GITHUB_PAGES=true` so assets use the `/island-page-diagnostic/` base path.
+CI sets `GITHUB_PAGES=true` for the `/island-page-diagnostic/` base path.
