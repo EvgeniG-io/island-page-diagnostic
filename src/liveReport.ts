@@ -14,7 +14,7 @@ import {
 
 function toneForProbe(probe: LiveProbe): LayerStatus {
   if (probe.kind === "ok") return "ok";
-  if (probe.kind === "cors-opaque") return "warn";
+  if (probe.kind === "cors-limited") return "info";
   if (probe.kind === "http-error") return "warn";
   return "fail";
 }
@@ -58,10 +58,10 @@ export function buildLiveReport(probe: LiveProbe): DiagnosticReport {
       kind: "network",
       title: "Network probe",
       subtitle:
-        probe.kind === "ok"
+        probe.kind === "ok" || probe.kind === "http-error"
           ? `HTTP ${probe.httpStatus}`
-          : probe.kind === "cors-opaque"
-            ? "opaque / CORS"
+          : probe.kind === "cors-limited"
+            ? "reachable · CORS"
             : probe.kind,
       tone,
       hopMs: probe.elapsedMs,

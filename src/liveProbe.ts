@@ -3,14 +3,13 @@ import { normalizeTestUrl, parseHost } from "./reportTypes";
 export type ProbeKind =
   | "ok"
   | "http-error"
-  | "cors-opaque"
+  | "cors-limited"
   | "network-error"
   | "timeout"
   | "invalid-url";
 
 /** Cache signals readable from HTTP headers + Performance + same-origin APIs */
 export type CacheInfo = {
-  /** Response Cache-Control (when CORS allows) */
   cacheControl: string | null;
   age: string | null;
   etag: string | null;
@@ -18,21 +17,16 @@ export type CacheInfo = {
   expires: string | null;
   pragma: string | null;
   vary: string | null;
-  /** CDN / proxy hints when exposed */
   cfCacheStatus: string | null;
   xCache: string | null;
   xCacheHits: string | null;
-  /** PerformanceResourceTiming for the probe URL */
   transferSize: number | null;
   encodedBodySize: number | null;
   decodedBodySize: number | null;
-  /** Chromium: "cache" when from browser cache */
   deliveryType: string | null;
   browserCacheHint: string;
-  /** Second request with force-cache */
   forceCacheElapsedMs: number | null;
   forceCacheHint: string | null;
-  /** Same-origin Cache Storage names */
   cacheStorageKeys: string[];
   serviceWorker: string;
 };
@@ -51,6 +45,8 @@ export type LiveProbe = {
   elapsedMs: number;
   errorName: string | null;
   errorMessage: string | null;
+  /** True when network answered (including opaque / CORS-limited). */
+  networkReachable: boolean;
   online: boolean;
   userAgent: string;
   language: string;
@@ -150,7 +146,6 @@ function browserCacheHintFromPerf(entry: PerfResource | null): string {
   if (entry.deliveryType === "cache") {
     return "Browser cache (deliveryType=cache)";
   }
-  // transferSize === 0 with non-zero decoded often means disk/memory cache
   if (
     entry.transferSize === 0 &&
     (entry.decodedBodySize > 0 || entry.encodedBodySize > 0)
@@ -166,7 +161,6 @@ function browserCacheHintFromPerf(entry: PerfResource | null): string {
 function latestResourceEntry(url: string): PerfResource | null {
   const entries = performance.getEntriesByName(url, "resource") as PerfResource[];
   if (entries.length > 0) return entries[entries.length - 1] ?? null;
-  // finalUrl / trailing slash variants
   const all = performance.getEntriesByType("resource") as PerfResource[];
   const match = all.filter(
     (e) => e.name === url || e.name.startsWith(url) || url.startsWith(e.name),
@@ -182,8 +176,6 @@ async function collectSameOriginCache(): Promise<
   try {
     if ("caches" in window) {
       cacheStorageKeys = await caches.keys();
-    } else {
-      cacheStorageKeys = [];
     }
   } catch {
     cacheStorageKeys = [];
@@ -240,7 +232,7 @@ async function measureForceCache(url: string): Promise<{
   } catch {
     return {
       forceCacheElapsedMs: null,
-      forceCacheHint: "force-cache probe failed (CORS/network)",
+      forceCacheHint: "force-cache not readable (CORS)",
     };
   }
 }
@@ -255,7 +247,6 @@ async function buildCacheInfo(opts: {
   const headerPart =
     opts.headersReadable && opts.res ? extractCacheHeaders(opts.res) : {};
 
-  // Let the performance timeline settle
   await new Promise((r) => window.setTimeout(r, 0));
   const entry =
     latestResourceEntry(opts.finalUrl || opts.url) ??
@@ -263,13 +254,16 @@ async function buildCacheInfo(opts: {
 
   const force = opts.headersReadable
     ? await measureForceCache(opts.finalUrl || opts.url)
-    : { forceCacheElapsedMs: null, forceCacheHint: "Skipped — headers not readable" };
+    : {
+        forceCacheElapsedMs: null,
+        forceCacheHint: "Skipped — response headers not readable",
+      };
 
   const sameOrigin = opts.isSameOrigin
     ? await collectSameOriginCache()
     : {
         cacheStorageKeys: [],
-        serviceWorker: "n/a (target is cross-origin)",
+        serviceWorker: "Not available (cross-origin)",
       };
 
   return emptyCache({
@@ -280,15 +274,77 @@ async function buildCacheInfo(opts: {
     deliveryType: entry?.deliveryType ?? null,
     browserCacheHint: opts.headersReadable
       ? browserCacheHintFromPerf(entry)
-      : "Not readable (opaque / failed probe)",
+      : "Headers not readable (CORS) — host may still be reachable",
     ...force,
     ...sameOrigin,
   });
 }
 
+type Attempt =
+  | { ok: true; res: Response; elapsedMs: number }
+  | { ok: false; name: string; message: string; elapsedMs: number; timedOut: boolean };
+
+async function attemptFetch(
+  url: string,
+  mode: RequestMode,
+): Promise<Attempt> {
+  const t0 = performance.now();
+  try {
+    const res = await fetchWithTimeout(
+      url,
+      {
+        method: "GET",
+        mode,
+        credentials: "omit",
+        cache: "no-store",
+        redirect: "follow",
+      },
+      PROBE_TIMEOUT_MS,
+    );
+    return { ok: true, res, elapsedMs: Math.round(performance.now() - t0) };
+  } catch (err) {
+    const name = err instanceof Error ? err.name : "Error";
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      ok: false,
+      name,
+      message,
+      elapsedMs: Math.round(performance.now() - t0),
+      timedOut: name === "AbortError",
+    };
+  }
+}
+
+/**
+ * Link-prefetch style reachability check when fetch modes disagree.
+ * Resolves true if the browser completed a network attempt (load or error
+ * from server). Resolves false only on clear failure to start.
+ */
+function probeWithLink(url: string, ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const link = document.createElement("link");
+    let done = false;
+    const finish = (value: boolean) => {
+      if (done) return;
+      done = true;
+      window.clearTimeout(timer);
+      link.remove();
+      resolve(value);
+    };
+    const timer = window.setTimeout(() => finish(false), ms);
+    link.rel = "prefetch";
+    link.as = "document";
+    link.href = url;
+    link.onload = () => finish(true);
+    // error often still means the host answered (e.g. HTML not a valid prefetch)
+    link.onerror = () => finish(true);
+    document.head.appendChild(link);
+  });
+}
+
 /**
  * Collect real browser + network observations for a URL.
- * Cannot read Island filter/SWG/policy — those need a privileged collector.
+ * CORS failure ≠ unreachable: many sites block cross-origin reads but still load.
  */
 export async function collectLiveProbe(rawInput: string): Promise<LiveProbe> {
   const collectedAt = new Date().toISOString();
@@ -321,6 +377,7 @@ export async function collectLiveProbe(rawInput: string): Promise<LiveProbe> {
       elapsedMs: 0,
       errorName: "InvalidURL",
       errorMessage: "Could not parse URL",
+      networkReachable: false,
       isSameOrigin: false,
       cache: emptyCache({
         browserCacheHint: "n/a — invalid URL",
@@ -340,27 +397,17 @@ export async function collectLiveProbe(rawInput: string): Promise<LiveProbe> {
 
   const t0 = performance.now();
 
-  try {
-    const res = await fetchWithTimeout(
-      url,
-      {
-        method: "GET",
-        mode: "cors",
-        credentials: "omit",
-        cache: "no-store",
-        redirect: "follow",
-      },
-      PROBE_TIMEOUT_MS,
-    );
-    const elapsedMs = Math.round(performance.now() - t0);
-    const contentType = res.headers.get("content-type");
-    const kind: ProbeKind =
-      res.status >= 200 && res.status < 400 ? "ok" : "http-error";
+  // 1) Prefer CORS when the site allows it (status + headers readable)
+  const cors = await attemptFetch(url, "cors");
+  if (cors.ok) {
+    const res = cors.res;
     try {
       await res.arrayBuffer();
     } catch {
       /* ignore */
     }
+    const kind: ProbeKind =
+      res.status >= 200 && res.status < 400 ? "ok" : "http-error";
     const finalUrl = res.url || url;
     const cache = await buildCacheInfo({
       url,
@@ -376,136 +423,135 @@ export async function collectLiveProbe(rawInput: string): Promise<LiveProbe> {
       kind,
       httpStatus: res.status,
       headersReadable: true,
-      contentType,
+      contentType: res.headers.get("content-type"),
       redirected: res.redirected,
       finalUrl,
-      elapsedMs,
+      elapsedMs: Math.round(performance.now() - t0),
       errorName: null,
       errorMessage: null,
+      networkReachable: true,
       isSameOrigin,
       cache,
       ...baseEnv,
     };
-  } catch (err) {
-    const name = err instanceof Error ? err.name : "Error";
-    const message = err instanceof Error ? err.message : String(err);
-    if (name === "AbortError") {
-      const same = isSameOrigin
-        ? await collectSameOriginCache()
-        : {
-            cacheStorageKeys: [] as string[],
-            serviceWorker: "n/a (cross-origin)",
-          };
-      return {
-        input: rawInput,
-        url,
-        host,
-        kind: "timeout",
-        httpStatus: null,
-        headersReadable: false,
-        contentType: null,
-        redirected: false,
-        finalUrl: null,
-        elapsedMs: Math.round(performance.now() - t0),
-        errorName: name,
-        errorMessage: `Timed out after ${PROBE_TIMEOUT_MS}ms`,
-        isSameOrigin,
-        cache: emptyCache({
-          browserCacheHint: "n/a — probe timed out",
-          ...same,
-        }),
-        ...baseEnv,
-      };
-    }
+  }
 
-    try {
-      const t1 = performance.now();
-      const opaque = await fetchWithTimeout(
-        url,
-        {
-          method: "GET",
-          mode: "no-cors",
-          credentials: "omit",
-          cache: "no-store",
-        },
-        PROBE_TIMEOUT_MS,
-      );
-      const elapsedMs = Math.round(performance.now() - t1);
-      if (opaque.type === "opaque" || opaque.status === 0) {
-        const same = isSameOrigin
-          ? await collectSameOriginCache()
-          : {
-              cacheStorageKeys: [] as string[],
-              serviceWorker: "n/a (cross-origin)",
-            };
-        return {
-          input: rawInput,
-          url,
-          host,
-          kind: "cors-opaque",
-          httpStatus: null,
-          headersReadable: false,
-          contentType: null,
-          redirected: false,
-          finalUrl: null,
-          elapsedMs,
-          errorName: name,
-          errorMessage:
-            "Reachable enough for an opaque response; status/headers hidden by CORS",
-          isSameOrigin,
-          cache: emptyCache({
-            browserCacheHint:
-              "Cache-Control / Age / ETag not readable (CORS opaque)",
-            ...same,
-          }),
-          ...baseEnv,
-        };
-      }
-    } catch (err2) {
-      const name2 = err2 instanceof Error ? err2.name : "Error";
-      const message2 = err2 instanceof Error ? err2.message : String(err2);
-      return {
-        input: rawInput,
-        url,
-        host,
-        kind: name2 === "AbortError" ? "timeout" : "network-error",
-        httpStatus: null,
-        headersReadable: false,
-        contentType: null,
-        redirected: false,
-        finalUrl: null,
-        elapsedMs: Math.round(performance.now() - t0),
-        errorName: name2,
-        errorMessage: message2 || message,
-        isSameOrigin,
-        cache: emptyCache({
-          browserCacheHint: "n/a — network error",
-          serviceWorker: isSameOrigin
-            ? (await collectSameOriginCache()).serviceWorker
-            : "n/a (cross-origin)",
-        }),
-        ...baseEnv,
-      };
-    }
-
+  if (cors.timedOut) {
     return {
       input: rawInput,
       url,
       host,
-      kind: "network-error",
+      kind: "timeout",
+      httpStatus: null,
+      headersReadable: false,
+      contentType: null,
+      redirected: false,
+      finalUrl: null,
+      elapsedMs: cors.elapsedMs,
+      errorName: cors.name,
+      errorMessage: `Timed out after ${PROBE_TIMEOUT_MS}ms`,
+      networkReachable: false,
+      isSameOrigin,
+      cache: emptyCache({
+        browserCacheHint: "n/a — probe timed out",
+        ...(isSameOrigin
+          ? await collectSameOriginCache()
+          : {
+              cacheStorageKeys: [],
+              serviceWorker: "Not available (cross-origin)",
+            }),
+      }),
+      ...baseEnv,
+    };
+  }
+
+  // 2) no-cors: proves reachability without readable status/headers
+  const opaque = await attemptFetch(url, "no-cors");
+  if (opaque.ok) {
+    // Opaque responses report type "opaque" and status 0 in browsers
+    const same = isSameOrigin
+      ? await collectSameOriginCache()
+      : {
+          cacheStorageKeys: [] as string[],
+          serviceWorker: "Not available (cross-origin)",
+        };
+    return {
+      input: rawInput,
+      url,
+      host,
+      kind: "cors-limited",
       httpStatus: null,
       headersReadable: false,
       contentType: null,
       redirected: false,
       finalUrl: null,
       elapsedMs: Math.round(performance.now() - t0),
-      errorName: name,
-      errorMessage: message,
+      errorName: null,
+      errorMessage:
+        "Host answered; HTTP status/headers hidden by CORS (not a network block)",
+      networkReachable: true,
       isSameOrigin,
-      cache: emptyCache({ browserCacheHint: "n/a — network error" }),
+      cache: emptyCache({
+        browserCacheHint:
+          "Cache headers not readable cross-origin (CORS) — site still reached",
+        ...same,
+      }),
       ...baseEnv,
     };
   }
+
+  // 3) Last resort: link prefetch — distinguishes DNS/offline from CORS noise
+  const linkOk = await probeWithLink(url, 8000);
+  if (linkOk) {
+    return {
+      input: rawInput,
+      url,
+      host,
+      kind: "cors-limited",
+      httpStatus: null,
+      headersReadable: false,
+      contentType: null,
+      redirected: false,
+      finalUrl: null,
+      elapsedMs: Math.round(performance.now() - t0),
+      errorName: null,
+      errorMessage:
+        "Reachability via link prefetch; fetch status/headers not readable",
+      networkReachable: true,
+      isSameOrigin,
+      cache: emptyCache({
+        browserCacheHint: "Headers not readable — prefetch reachability only",
+        serviceWorker: isSameOrigin
+          ? (await collectSameOriginCache()).serviceWorker
+          : "Not available (cross-origin)",
+      }),
+      ...baseEnv,
+    };
+  }
+
+  return {
+    input: rawInput,
+    url,
+    host,
+    kind: opaque.timedOut || cors.timedOut ? "timeout" : "network-error",
+    httpStatus: null,
+    headersReadable: false,
+    contentType: null,
+    redirected: false,
+    finalUrl: null,
+    elapsedMs: Math.round(performance.now() - t0),
+    errorName: opaque.name || cors.name,
+    errorMessage: opaque.message || cors.message,
+    networkReachable: false,
+    isSameOrigin,
+    cache: emptyCache({
+      browserCacheHint: "n/a — host did not respond to probe",
+      serviceWorker: isSameOrigin
+        ? (await collectSameOriginCache()).serviceWorker
+        : "Not available (cross-origin)",
+    }),
+    ...baseEnv,
+  };
 }
 
 export function probeOutcomeLabel(probe: LiveProbe): string {
@@ -513,16 +559,16 @@ export function probeOutcomeLabel(probe: LiveProbe): string {
     case "ok":
       return `Reachable · HTTP ${probe.httpStatus}`;
     case "http-error":
-      return `HTTP ${probe.httpStatus}`;
-    case "cors-opaque":
-      return "Opaque response (CORS)";
+      return `Reachable · HTTP ${probe.httpStatus}`;
+    case "cors-limited":
+      return "Reachable · headers hidden (CORS)";
     case "timeout":
       return "Timeout";
     case "invalid-url":
       return "Invalid URL";
     case "network-error":
     default:
-      return "Network error / blocked";
+      return "Unreachable from this browser";
   }
 }
 
