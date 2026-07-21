@@ -2,19 +2,15 @@ import type {
   DiagnosticReport,
   FactGroup,
   LayerDetail,
-  LayerId,
   LayerStatus,
   PathStep,
   ReportLine,
-} from "./mockReport";
+} from "./reportTypes";
 import {
   cacheSummary,
   probeOutcomeLabel,
   type LiveProbe,
 } from "./liveProbe";
-
-const UNAVAILABLE =
-  "Unavailable from this web page — needs Island privileged collector";
 
 function toneForProbe(probe: LiveProbe): LayerStatus {
   if (probe.kind === "ok") return "ok";
@@ -24,29 +20,21 @@ function toneForProbe(probe: LiveProbe): LayerStatus {
 }
 
 function layer(
-  id: LayerId,
+  id: LayerDetail["id"],
   label: string,
   detail: Omit<LayerDetail, "id" | "label">,
 ): LayerDetail {
   return { id, label, ...detail };
 }
 
-function islandNa(id: LayerId, label: string): LayerDetail {
-  return layer(id, label, {
-    status: "na",
-    summary: UNAVAILABLE,
-    rows: [
-      ["Tested URL", ""], // filled below
-      ["Host", ""],
-      ["Source", "Not collected"],
-      ["Reason", UNAVAILABLE],
-    ],
-  });
+function observed(value: string | null | undefined, empty = "Not readable"): string {
+  if (value == null || value === "") return empty;
+  return value;
 }
 
 /**
- * Build a diagnostic report from real browser/network probe data.
- * Island policy/filter/SWG fields are explicitly N/A (not mocked).
+ * Build a report from real browser/network probe data only.
+ * No demo templates, no invented Island policy fields.
  */
 export function buildLiveReport(probe: LiveProbe): DiagnosticReport {
   const displayUrl = probe.url.endsWith("/") ? probe.url : `${probe.url}/`;
@@ -79,21 +67,12 @@ export function buildLiveReport(probe: LiveProbe): DiagnosticReport {
       hopMs: probe.elapsedMs,
     },
     {
-      kind: "extension",
-      title: "Island",
-      subtitle: "Not available here",
-      tone: "na",
-      hopMs: 0,
-    },
-    {
       kind: "outcome",
       title: "Outcome",
       subtitle: outcome,
       tone,
     },
   ];
-
-  const pathTotalMs = probe.elapsedMs;
 
   const factGroups: FactGroup[] = [
     {
@@ -115,7 +94,7 @@ export function buildLiveReport(probe: LiveProbe): DiagnosticReport {
         },
         {
           label: "Content-Type",
-          value: probe.contentType ?? "Not readable",
+          value: observed(probe.contentType),
         },
         {
           label: "Redirected",
@@ -123,7 +102,7 @@ export function buildLiveReport(probe: LiveProbe): DiagnosticReport {
         },
         {
           label: "Final URL",
-          value: probe.finalUrl ?? "n/a",
+          value: observed(probe.finalUrl, "Same as tested / not exposed"),
         },
         { label: "Elapsed", value: `${probe.elapsedMs} ms` },
         {
@@ -144,23 +123,23 @@ export function buildLiveReport(probe: LiveProbe): DiagnosticReport {
         { label: "Browser cache hint", value: probe.cache.browserCacheHint },
         {
           label: "Cache-Control",
-          value: probe.cache.cacheControl ?? "Not readable",
+          value: observed(probe.cache.cacheControl),
         },
-        { label: "Age", value: probe.cache.age ?? "Not readable" },
-        { label: "ETag", value: probe.cache.etag ?? "Not readable" },
+        { label: "Age", value: observed(probe.cache.age) },
+        { label: "ETag", value: observed(probe.cache.etag) },
         {
           label: "Last-Modified",
-          value: probe.cache.lastModified ?? "Not readable",
+          value: observed(probe.cache.lastModified),
         },
-        { label: "Expires", value: probe.cache.expires ?? "Not readable" },
-        { label: "Vary", value: probe.cache.vary ?? "Not readable" },
+        { label: "Expires", value: observed(probe.cache.expires) },
+        { label: "Vary", value: observed(probe.cache.vary) },
         {
           label: "CF-Cache-Status",
-          value: probe.cache.cfCacheStatus ?? "Not present / not readable",
+          value: observed(probe.cache.cfCacheStatus, "Not present / not readable"),
         },
         {
           label: "X-Cache",
-          value: probe.cache.xCache ?? "Not present / not readable",
+          value: observed(probe.cache.xCache, "Not present / not readable"),
         },
         {
           label: "transferSize",
@@ -171,11 +150,7 @@ export function buildLiveReport(probe: LiveProbe): DiagnosticReport {
         },
         {
           label: "force-cache probe",
-          value: probe.cache.forceCacheHint ?? "n/a",
-        },
-        {
-          label: "Island classification cache",
-          value: probe.cache.islandClassificationCache,
+          value: observed(probe.cache.forceCacheHint, "Not run"),
         },
       ],
     },
@@ -210,24 +185,9 @@ export function buildLiveReport(probe: LiveProbe): DiagnosticReport {
               ? probe.cache.cacheStorageKeys.join(", ")
               : probe.isSameOrigin
                 ? "None"
-                : "n/a (cross-origin)",
+                : "Not available (cross-origin)",
         },
         { label: "Service worker", value: probe.cache.serviceWorker },
-      ],
-    },
-    {
-      id: "island-gap",
-      label: "Island layers (not collected)",
-      origin: "local",
-      facts: [
-        { label: "Tested URL", value: displayUrl },
-        { label: "Host", value: host },
-        { label: "Matched rule", value: UNAVAILABLE },
-        { label: "URL category / reputation", value: UNAVAILABLE },
-        { label: "Classification cache", value: UNAVAILABLE },
-        { label: "SWG verdict", value: UNAVAILABLE },
-        { label: "Config / tenant policy", value: UNAVAILABLE },
-        { label: "Extension / LMC", value: UNAVAILABLE },
       ],
     },
   ];
@@ -249,20 +209,8 @@ export function buildLiveReport(probe: LiveProbe): DiagnosticReport {
       body: `online=${probe.online ? "yes" : "no"} · ${probe.timezone} · ${probe.language}`,
       tone: probe.online ? "ok" : "fail",
     },
-    {
-      tag: "ISLAND",
-      body: UNAVAILABLE,
-      tone: "na",
-    },
     { tag: "OUTCOME", body: outcome, tone },
   ];
-
-  const fillUrl = (rows: [string, string][]): [string, string][] =>
-    rows.map(([k, v]) => {
-      if (k === "Tested URL") return [k, displayUrl];
-      if (k === "Host") return [k, host];
-      return [k, v];
-    });
 
   const layers: LayerDetail[] = [
     layer("page", "Page / probe", {
@@ -277,7 +225,7 @@ export function buildLiveReport(probe: LiveProbe): DiagnosticReport {
           probe.httpStatus != null ? String(probe.httpStatus) : "Not readable",
         ],
         ["Headers readable", probe.headersReadable ? "Yes" : "No"],
-        ["Content-Type", probe.contentType ?? "Not readable"],
+        ["Content-Type", observed(probe.contentType)],
         ["Elapsed ms", String(probe.elapsedMs)],
         ["Collected at", probe.collectedAt],
       ],
@@ -302,19 +250,18 @@ export function buildLiveReport(probe: LiveProbe): DiagnosticReport {
         ["Tested URL", displayUrl],
         ["Host", host],
         ["Elapsed ms", String(probe.elapsedMs)],
-        ["Timeout budget", "12000 ms"],
         ["Browser cache hint", probe.cache.browserCacheHint],
-        [
-          "Cache-Control",
-          probe.cache.cacheControl ?? "Not readable",
-        ],
-        ["Age", probe.cache.age ?? "Not readable"],
-        ["ETag", probe.cache.etag ?? "Not readable"],
+        ["Cache-Control", observed(probe.cache.cacheControl)],
+        ["Age", observed(probe.cache.age)],
+        ["ETag", observed(probe.cache.etag)],
         [
           "CF-Cache-Status",
-          probe.cache.cfCacheStatus ?? "Not present / not readable",
+          observed(probe.cache.cfCacheStatus, "Not present / not readable"),
         ],
-        ["X-Cache", probe.cache.xCache ?? "Not present / not readable"],
+        [
+          "X-Cache",
+          observed(probe.cache.xCache, "Not present / not readable"),
+        ],
         [
           "transferSize",
           probe.cache.transferSize != null
@@ -325,85 +272,23 @@ export function buildLiveReport(probe: LiveProbe): DiagnosticReport {
           "force-cache ms",
           probe.cache.forceCacheElapsedMs != null
             ? String(probe.cache.forceCacheElapsedMs)
-            : "n/a",
-        ],
-        [
-          "Island classification cache",
-          probe.cache.islandClassificationCache,
+            : "Not run",
         ],
       ],
     }),
-    {
-      ...islandNa("extension", "Extension"),
-      rows: fillUrl(islandNa("extension", "Extension").rows),
-    },
-    {
-      ...islandNa("browser-policy", "Browser Policy"),
-      rows: fillUrl([
-        ["Tested URL", ""],
-        ["Host", ""],
-        ["Classification cache", UNAVAILABLE],
-        ["Source", "Not collected"],
-        ["Reason", UNAVAILABLE],
-      ]),
-    },
-    {
-      ...islandNa("swg", "SWG"),
-      rows: fillUrl(islandNa("swg", "SWG").rows),
-    },
-    {
-      ...islandNa("app-params", "App Params"),
-      rows: fillUrl(islandNa("app-params", "App Params").rows),
-    },
-    {
-      ...islandNa("ztna", "ZTNA"),
-      rows: fillUrl(islandNa("ztna", "ZTNA").rows),
-    },
-    {
-      ...islandNa("rbi", "RBI"),
-      rows: fillUrl(islandNa("rbi", "RBI").rows),
-    },
-    {
-      ...islandNa("identity", "Identity"),
-      rows: fillUrl(islandNa("identity", "Identity").rows),
-    },
-    {
-      ...islandNa("storage", "Storage"),
-      rows: fillUrl(islandNa("storage", "Storage").rows),
-    },
-    {
-      ...islandNa("files", "Files"),
-      rows: fillUrl(islandNa("files", "Files").rows),
-    },
-    {
-      ...islandNa("telemetry", "Telemetry"),
-      rows: fillUrl(islandNa("telemetry", "Telemetry").rows),
-    },
   ];
 
   return {
     id: "live-probe",
     label: "Live probe",
-    description: "Real browser + network observations · Island fields N/A",
+    description: "Observed browser + network facts only",
     site: host,
     url: probe.url,
-    tenant: "n/a",
-    tenantId: "n/a",
-    matchedRule: "n/a — Island collector required",
     outcome,
     rulePath,
-    pathTotalMs,
+    pathTotalMs: probe.elapsedMs,
     factGroups,
     statusLines,
     layers,
-    focusPrimary: true,
-    primaryLayers: [
-      "page",
-      "endpoint",
-      "perf",
-      "extension",
-      "swg",
-      "browser-policy",
-    ],
   };
 }

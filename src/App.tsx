@@ -1,20 +1,16 @@
 import { useMemo, useState } from "react";
-import {
-  SCENARIOS,
-  SCENARIO_GROUPS,
-  applyTestedUrl,
-  type DiagnosticReport,
-  type HopKind,
-  type LayerDetail,
-  type LayerStatus,
-  type PathStep,
-} from "./mockReport";
+import type {
+  DiagnosticReport,
+  HopKind,
+  LayerDetail,
+  LayerStatus,
+  PathStep,
+} from "./reportTypes";
 import { collectLiveProbe } from "./liveProbe";
 import { buildLiveReport } from "./liveReport";
 import "./App.css";
 
 type View = "overview" | LayerDetail["id"];
-type DataMode = "live" | "demo";
 
 function statusLabel(s: LayerStatus): string {
   if (s === "ok") return "OK";
@@ -25,24 +21,12 @@ function statusLabel(s: LayerStatus): string {
 }
 
 function App() {
-  const [scenarioId, setScenarioId] = useState<string | null>(null);
-  const [url, setUrl] = useState("https://example.com");
+  const [url, setUrl] = useState("");
   const [running, setRunning] = useState(false);
   const [report, setReport] = useState<DiagnosticReport | null>(null);
-  const [dataMode, setDataMode] = useState<DataMode>("live");
   const [view, setView] = useState<View>("overview");
   const [copied, setCopied] = useState(false);
-  const [showAllLayers, setShowAllLayers] = useState(false);
   const [probeError, setProbeError] = useState<string | null>(null);
-
-  const visibleLayers = useMemo(() => {
-    if (!report) return [];
-    if (!report.focusPrimary || showAllLayers || !report.primaryLayers) {
-      return report.layers;
-    }
-    const primary = new Set(report.primaryLayers);
-    return report.layers.filter((l) => primary.has(l.id));
-  }, [report, showAllLayers]);
 
   const activeLayer = useMemo(() => {
     if (!report || view === "overview") return null;
@@ -58,37 +42,18 @@ function App() {
     [report],
   );
 
-  function selectScenario(id: string) {
-    const scenario = SCENARIOS.find((s) => s.id === id);
-    if (!scenario) return;
-    // Demo templates only — keep URL, mark as demo (not live)
-    const keepUrl = url.trim() || report?.url || scenario.url;
-    const bound = applyTestedUrl(scenario, keepUrl);
-    setScenarioId(id);
-    setDataMode("demo");
-    setUrl(bound.url);
-    setReport(bound);
-    setProbeError(null);
-    setView("overview");
-    setCopied(false);
-    setShowAllLayers(false);
-  }
-
   async function runDiagnose() {
     const input = url.trim();
     if (!input) return;
     setRunning(true);
     setCopied(false);
     setProbeError(null);
-    setScenarioId(null);
-    setDataMode("live");
     try {
       const probe = await collectLiveProbe(input);
       const live = buildLiveReport(probe);
       setUrl(live.url);
       setReport(live);
       setView("overview");
-      setShowAllLayers(false);
     } catch (err) {
       setProbeError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -101,8 +66,6 @@ function App() {
     const parts = [
       `Tested URL: ${report.url}`,
       `Host: ${report.site}`,
-      `Tenant: ${report.tenant} (${report.tenantId})`,
-      `Matched rule: ${report.matchedRule}`,
       `Outcome: ${report.outcome}`,
       "",
       "Hop path:",
@@ -138,12 +101,10 @@ function App() {
         <div className="brand-block">
           <p className="brand">Island Page Diagnostic</p>
           <p className="tagline">
-            Enter a URL · see the same URL on every hop, fact, and layer
+            Real probe data only — no demo templates or invented Island fields
           </p>
         </div>
-        <span className={`mode-pill ${dataMode}`}>
-          {dataMode === "live" ? "live probe" : "demo template"}
-        </span>
+        <span className="mode-pill live">observed</span>
       </header>
 
       <section className="compose" aria-label="URL under test">
@@ -152,7 +113,7 @@ function App() {
           <input
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            placeholder="https://… or localhost:5173"
+            placeholder="https://broken-site.example"
             spellCheck={false}
           />
         </label>
@@ -174,9 +135,10 @@ function App() {
 
       {!report && !running && (
         <p className="empty-hint">
-          Run diagnose to collect real browser + network facts for this URL.
-          Island filter / SWG / policy fields stay N/A until a privileged
-          collector is wired. Demo path cards below only load mock templates.
+          Enter the URL under review and run diagnose. Results are measured from
+          this browser (reachability, timing, HTTP/cache headers when readable).
+          Island policy / classification / SWG are not shown — they are not
+          readable here.
         </p>
       )}
 
@@ -188,14 +150,14 @@ function App() {
               <span className="stat-value">{report.site}</span>
             </div>
             <div className="stat">
-              <span className="stat-label">Data</span>
-              <span className="stat-value">
-                {dataMode === "live" ? "Live probe" : "Demo template"}
-              </span>
+              <span className="stat-label">Source</span>
+              <span className="stat-value">Live probe</span>
             </div>
             <div className="stat">
-              <span className="stat-label">Matched rule</span>
-              <span className="stat-value">{report.matchedRule}</span>
+              <span className="stat-label">Elapsed</span>
+              <span className="stat-value">
+                {report.pathTotalMs != null ? `${report.pathTotalMs} ms` : "—"}
+              </span>
             </div>
             <div className="stat">
               <span className="stat-label">Outcome</span>
@@ -204,16 +166,6 @@ function App() {
           </section>
 
           <section className="actions-row">
-            {report.focusPrimary && report.primaryLayers && (
-              <label className="toggle">
-                <input
-                  type="checkbox"
-                  checked={showAllLayers}
-                  onChange={(e) => setShowAllLayers(e.target.checked)}
-                />
-                Show all layers
-              </label>
-            )}
             <button type="button" className="ghost" onClick={copyReport}>
               {copied ? "Copied" : "Copy report"}
             </button>
@@ -227,7 +179,7 @@ function App() {
             >
               Report
             </button>
-            {visibleLayers.map((l) => (
+            {report.layers.map((l) => (
               <button
                 key={l.id}
                 type="button"
@@ -248,16 +200,11 @@ function App() {
             <section className="panel">
               <div className="panel-head">
                 <h2>Hop to hop</h2>
-                <span className={`badge ${dataMode === "live" ? "ok" : "warn"}`}>
-                  {dataMode === "live"
-                    ? "live browser · network"
-                    : "demo template — not live"}
-                </span>
+                <span className="badge ok">observed only</span>
               </div>
               <HopPath
                 path={report.rulePath}
                 totalMs={report.pathTotalMs}
-                matchedRule={report.matchedRule}
                 testedUrl={report.url}
                 testedHost={report.site}
               />
@@ -280,15 +227,15 @@ function App() {
               <h3>Extracted data</h3>
               <div className="facts-board">
                 <div className="facts-column">
-                  <h4 className="facts-col-title">From the page</h4>
+                  <h4 className="facts-col-title">From the probe</h4>
                   {pageGroups.map((g) => (
                     <article key={g.id} className="fact-card origin-page">
                       <header className="fact-card-head">
                         <h4>{g.label}</h4>
-                        <span className="origin-pill">page</span>
+                        <span className="origin-pill">observed</span>
                       </header>
                       <p className="fact-url-chip">
-                        Path for · <code>{report.url}</code>
+                        For · <code>{report.url}</code>
                       </p>
                       <dl className="fact-list">
                         {g.facts.map((f) => (
@@ -307,10 +254,10 @@ function App() {
                     <article key={g.id} className="fact-card origin-local">
                       <header className="fact-card-head">
                         <h4>{g.label}</h4>
-                        <span className="origin-pill">local</span>
+                        <span className="origin-pill">observed</span>
                       </header>
                       <p className="fact-url-chip">
-                        Path for · <code>{report.url}</code>
+                        For · <code>{report.url}</code>
                       </p>
                       <dl className="fact-list">
                         {g.facts.map((f) => (
@@ -325,7 +272,7 @@ function App() {
                 </div>
               </div>
 
-              <h3>Component layers · {report.site}</h3>
+              <h3>Observed layers · {report.site}</h3>
               <table className="table">
                 <thead>
                   <tr>
@@ -335,7 +282,7 @@ function App() {
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleLayers.map((l) => (
+                  {report.layers.map((l) => (
                     <tr key={l.id} className={`tone-${l.status}`}>
                       <td>
                         <button
@@ -352,53 +299,6 @@ function App() {
                   ))}
                 </tbody>
               </table>
-
-              <section className="path-library" aria-label="Demo path templates">
-                <div className="path-library-head">
-                  <h3>Demo path templates</h3>
-                  <p>
-                    Mock case-shaped paths only. Selecting one switches to demo
-                    mode — use Run diagnose again for live probe data.
-                  </p>
-                </div>
-                {SCENARIO_GROUPS.map((group) => {
-                  const items = group.scenarioIds
-                    .map((id) => SCENARIOS.find((s) => s.id === id))
-                    .filter((s): s is DiagnosticReport => Boolean(s));
-                  return (
-                    <div key={group.id} className="path-group">
-                      <div className="path-group-head">
-                        <h3>{group.title}</h3>
-                        <p>{group.hint}</p>
-                      </div>
-                      <div className="path-group-cards">
-                        {items.map((s) => (
-                          <button
-                            key={s.id}
-                            type="button"
-                            className={
-                              dataMode === "demo" && scenarioId === s.id
-                                ? "scenario-card active"
-                                : "scenario-card"
-                            }
-                            onClick={() => selectScenario(s.id)}
-                          >
-                            <span className="scenario-label">{s.label}</span>
-                            <span className="scenario-desc">
-                              {s.description}
-                            </span>
-                            {dataMode === "demo" && scenarioId === s.id ? (
-                              <span className="scenario-bound">
-                                Demo · {report.site}
-                              </span>
-                            ) : null}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-              </section>
             </section>
           ) : (
             activeLayer && (
@@ -440,29 +340,18 @@ function App() {
 
 const HOP_GLYPH: Record<HopKind, string> = {
   browser: "B",
-  extension: "E",
-  page: "P",
-  classify: "C",
-  rule: "R",
   network: "N",
-  policy: "A",
-  storage: "S",
-  files: "F",
-  config: "G",
-  vpn: "V",
   outcome: "O",
 };
 
 function HopPath({
   path,
   totalMs,
-  matchedRule,
   testedUrl,
   testedHost,
 }: {
   path: PathStep[];
   totalMs?: number;
-  matchedRule: string;
   testedUrl: string;
   testedHost: string;
 }) {
@@ -480,8 +369,6 @@ function HopPath({
         <span className="hop-meta-value">{testedUrl}</span>
         <span className="hop-meta-label">Host</span>
         <span className="hop-meta-value">{testedHost}</span>
-        <span className="hop-meta-label">Matched rule</span>
-        <span className="hop-meta-value">{matchedRule}</span>
       </div>
 
       <div className="hop-stage">

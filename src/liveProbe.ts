@@ -1,4 +1,4 @@
-import { normalizeTestUrl, parseHost } from "./mockReport";
+import { normalizeTestUrl, parseHost } from "./reportTypes";
 
 export type ProbeKind =
   | "ok"
@@ -35,8 +35,6 @@ export type CacheInfo = {
   /** Same-origin Cache Storage names */
   cacheStorageKeys: string[];
   serviceWorker: string;
-  /** Island device classification cache — not available here */
-  islandClassificationCache: string;
 };
 
 export type LiveProbe = {
@@ -74,8 +72,6 @@ type PerfResource = PerformanceResourceTiming & {
 };
 
 const PROBE_TIMEOUT_MS = 12_000;
-const ISLAND_CACHE_NA =
-  "Unavailable — Island classification / policy cache needs privileged collector";
 
 function emptyCache(partial?: Partial<CacheInfo>): CacheInfo {
   return {
@@ -98,7 +94,6 @@ function emptyCache(partial?: Partial<CacheInfo>): CacheInfo {
     forceCacheHint: null,
     cacheStorageKeys: [],
     serviceWorker: "Not checked",
-    islandClassificationCache: ISLAND_CACHE_NA,
     ...partial,
   };
 }

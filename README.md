@@ -1,8 +1,6 @@
-# Island Page Diagnostic (MVP UI)
+# Island Page Diagnostic
 
-Per-URL diagnostic report UI.
-
-**Run diagnose** collects **live** browser + network probe facts (HTTP status when readable, timing, online/UA/timezone). Island filter / SWG / policy fields stay **N/A** until a privileged collector is wired. Path cards at the bottom are optional **demo templates** only.
+Per-URL diagnostic UI. **Observed data only** — no demo templates, no invented Island policy fields.
 
 ## Live (GitHub Pages)
 
@@ -15,18 +13,23 @@ npm install
 npm run dev
 ```
 
-Open the URL Vite prints (usually `http://localhost:5173`).
+## What Run diagnose collects (real)
 
-## Probe smoke (real network, Node)
+- HTTP reachability / status when CORS allows
+- Probe timing
+- Cache-related response headers when readable (`Cache-Control`, `Age`, `ETag`, CDN hints)
+- Browser env (online, timezone, UA)
+- Same-origin Cache Storage / service worker only if the tested URL is this app’s origin
+
+## What is not shown
+
+Island classification cache, matched rules, SWG, tenant config, extension state — those are not readable from this webpage, so they are omitted (not faked).
+
+## Probe smoke (Node)
 
 ```bash
-node scripts/probe-smoke.mjs
 node scripts/probe-smoke.mjs https://example.com
 ```
-
-## Island-only data
-
-Matched rule, category/reputation, SWG verdict, tenant config, extension/LMC need a managed Island profile + privileged collector (not available to a normal website).
 
 ## Build
 
